@@ -16,10 +16,19 @@ På Windows kan du etterpå dobbeltklikke `start.bat`. På macOS/Linux er stien 
 
 ## Stav eller plate
 
-Simuleringen starter med staven. Knappen *Bytt til 2D* / *Bytt til 1D* veksler mellom stav og plate. Materialet og innstillingene for varmekilder følger med.
+Simuleringen starter med staven. Knappen *Bytt til 2D* / *Bytt til 1D* veksler mellom stav og plate. Materialet og innstillingene for varmekilder og rand følger med.
 
 - **Stav (1D):** den heltrukne kurven er den numeriske løsningen, den stiplede er Fourier-rekka. Fargestripen under viser staven.
 - **Plate (2D):** det venstre fargekartet er den numeriske løsningen, det høyre er Fourier-rekka.
+
+## Rand
+
+Knappen *Rand* velger hva som skjer i kantene:
+
+- **Rand: isolert** – ingen varme slipper ut. Temperaturen jevner seg ut til snittet.
+- **Rand: fast temp.** – kantene holdes på en fast temperatur, som du skriver inn i feltene som dukker opp. For staven kan *Venstre* og *Høyre* ende ha ulik temperatur; for platen har alle fire kantene temperaturen *Kant*.
+
+Bytte av rand, eller ny randtemperatur, starter simuleringen på nytt fra samme starttemperatur.
 
 ## Rediger temperaturen
 

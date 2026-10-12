@@ -1,7 +1,11 @@
 """Interaktivt simuleringsvindu for varmeledning i en stav (1D) eller en plate (2D).
 
 Knappen «Bytt til 2D» / «Bytt til 1D» veksler mellom de to. Materialverdiene og
-innstillingene for varmekilder følger med.
+innstillingene for varmekilder og rand følger med.
+
+Rand: knappen «Rand: isolert» / «Rand: fast temp.» velger mellom isolerte kanter
+(Neumann) og kanter som holdes på en fast temperatur (Dirichlet). For staven kan
+de to endene ha ulik temperatur; for platen har alle fire kantene samme.
 
 Redigering av starttemperaturen:
 * Stav:  venstreklikk legger til en varmekilde, venstre + dra tegner kurven fritt.
@@ -24,7 +28,13 @@ import numpy as np
 from matplotlib.colors import Normalize, PowerNorm
 from matplotlib.widgets import Button, Slider, TextBox
 
-from .losere import FourierCosinusrekke, FourierCosinusrekke2D, simuler_eksplisitt
+from .losere import (
+    FourierCosinusrekke,
+    FourierCosinusrekke2D,
+    FourierSinusrekke,
+    FourierSinusrekke2D,
+    simuler_eksplisitt,
+)
 from .materialer import Materiale
 from .rutenett import Rutenett
 from .startbetingelser import varmt_segment
@@ -71,6 +81,10 @@ class _Visning:
         self.T_omgivelse = innstillinger["T_omgivelse"]
         self.T_kilde = innstillinger["T_kilde"]
         self.bredde = innstillinger["bredde"]
+        self.fast_rand = innstillinger["fast_rand"]  # False: isolerte kanter, True: fast temperatur
+        self.T_venstre = innstillinger["T_venstre"]  # stavens ender
+        self.T_hoyre = innstillinger["T_hoyre"]
+        self.T_kant = innstillinger["T_kant"]  # platens kanter
         self._bytt_modus = bytt_modus
 
         self.u0 = self._startbetingelse()
@@ -103,7 +117,8 @@ class _Visning:
         return {
             "k": self.k, "rho": self.rho, "c_p": self.c_p,
             "T_omgivelse": self.T_omgivelse, "T_kilde": self.T_kilde, "bredde": self.bredde,
-            "fourier_ledd": int(self.ledd_bryter.val),
+            "fast_rand": self.fast_rand, "T_venstre": self.T_venstre, "T_hoyre": self.T_hoyre,
+            "T_kant": self.T_kant, "fourier_ledd": int(self.ledd_bryter.val),
         }
 
     def lukk(self) -> None:
@@ -128,8 +143,16 @@ class _Visning:
     def _bygg_figur(self) -> None:
         raise NotImplementedError
 
+    def _rand(self):
+        """Faste randtemperaturer slik løseren vil ha dem, eller None når kantene er isolert."""
+        raise NotImplementedError
+
+    def _bygg_randfelt(self, y: float) -> list:
+        """Lager tekstfeltene for randtemperaturene (på raden med høyde y) og returnerer dem."""
+        raise NotImplementedError
+
     def _ny_start(self) -> None:
-        """Kalles når starttemperaturen er endret: lager ny Fourier-rekke."""
+        """Kalles når starttemperaturen eller randen er endret: lager ny Fourier-rekke."""
         raise NotImplementedError
 
     def _likevekt(self) -> tuple:
@@ -207,7 +230,7 @@ class _Visning:
         if i > siste:
             tider = self.tider[siste + 1 : i + 1] - self.tider[siste]
             self.bilder[siste + 1 : i + 1] = simuler_eksplisitt(
-                self.bilder[siste], self.rutenett, self.alfa, tider
+                self.bilder[siste], self.rutenett, self.alfa, tider, rand=self._rand()
             )
             self._antall_beregnet = i + 1
 
@@ -224,7 +247,7 @@ class _Visning:
         if self._forrige_viste is not None and t_fra <= self._forrige_viste[0] <= t:
             t_fra, u = self._forrige_viste
         if t > t_fra:
-            u = simuler_eksplisitt(u, self.rutenett, self.alfa, [t - t_fra])[0]
+            u = simuler_eksplisitt(u, self.rutenett, self.alfa, [t - t_fra], rand=self._rand())[0]
         self._forrige_viste = (t, u)
         self._sett_tilstand(t, u)
 
@@ -250,6 +273,22 @@ class _Visning:
         """Redigering midt i simuleringen: tilstanden nå blir den nye starten."""
         self._stopp()
         self.u0 = np.array(self.u, dtype=float)
+
+    def _bytt_rand(self, _=None) -> None:
+        """Veksler mellom isolerte kanter og fast temperatur på kantene, og
+        starter simuleringen på nytt fra samme starttemperatur."""
+        self._stopp()
+        self.fast_rand = not self.fast_rand
+        self._vis_randvalg()
+        self.simuler()
+
+    def _vis_randvalg(self) -> None:
+        """Feltene for randtemperatur vises bare når kantene har fast temperatur."""
+        self.rand_knapp.label.set_text("Rand: fast temp." if self.fast_rand else "Rand: isolert")
+        for felt in self._randfelt:
+            felt.ax.set_visible(self.fast_rand)
+            felt.active = self.fast_rand
+        self.fig.canvas.draw_idle()
 
     def _nullstill(self, _=None) -> None:
         self._stopp()
@@ -388,7 +427,9 @@ class _Visning:
 
     # --- Kontroller ----------------------------------------------------------
 
-    def _akse(self, x: float, y: float, bredde: float, hoyde: float = 0.045):
+    RADER = (0.215, 0.15, 0.085, 0.02)  # høyden (y) til de fire radene med kontroller
+
+    def _akse(self, x: float, y: float, bredde: float, hoyde: float = 0.042):
         return self.fig.add_axes((x, y, bredde, hoyde))
 
     def _knapp(self, akse, tekst: str, funksjon) -> Button:
@@ -408,53 +449,66 @@ class _Visning:
         return bryter
 
     def _bygg_kontroller(self, fourier_ledd: int) -> None:
+        rad1, rad2, rad3, rad4 = self.RADER
+
         # Rad 1: avspilling og tid
-        self.spill_knapp = self._knapp(self._akse(0.07, 0.19, 0.09), "Spill av", self._spill_pause)
-        self.tid_bryter = self._bryter(self._akse(0.19, 0.19, 0.40), "", 0.0, 1.0, valinit=0.0)
+        self.spill_knapp = self._knapp(self._akse(0.07, rad1, 0.09), "Spill av", self._spill_pause)
+        self.tid_bryter = self._bryter(self._akse(0.19, rad1, 0.40), "", 0.0, 1.0, valinit=0.0)
         self.tid_bryter.valtext.set_visible(False)
         self.tid_bryter.drawon = False  # bryterne tegnes med blitting, ikke med full tegning
         self.tid_bryter.on_changed(
             lambda p: None if self._endrer_kontroller else self.vis_tid(self.tid_fra_bryter(p))
         )
-        self.tid_felt = self._tekstboks(self._akse(0.66, 0.19, 0.10), "t [s] ")
+        self.tid_felt = self._tekstboks(self._akse(0.66, rad1, 0.10), "t [s] ")
         self.tid_felt.on_submit(self._tid_skrevet)
-        self.slutt_felt = self._tekstboks(self._akse(0.88, 0.19, 0.10), "Slutt [s] ")
+        self.slutt_felt = self._tekstboks(self._akse(0.88, rad1, 0.10), "Slutt [s] ")
         self._tallfelt(self.slutt_felt, "t_slutt", etter=lambda: self._ny_tidsakse(behold_tid=True))
 
         # Rad 2: materiale, og bytte mellom stav og plate
-        self.k_felt = self._tekstboks(self._akse(0.10, 0.11, 0.08), "k ", formater_tall(self.k))
-        self.rho_felt = self._tekstboks(self._akse(0.23, 0.11, 0.08), "ρ ", formater_tall(self.rho))
-        self.cp_felt = self._tekstboks(self._akse(0.37, 0.11, 0.08), "c$_p$ ", formater_tall(self.c_p))
+        self.k_felt = self._tekstboks(self._akse(0.10, rad2, 0.08), "k ", formater_tall(self.k))
+        self.rho_felt = self._tekstboks(self._akse(0.23, rad2, 0.08), "ρ ", formater_tall(self.rho))
+        self.cp_felt = self._tekstboks(self._akse(0.37, rad2, 0.08), "c$_p$ ", formater_tall(self.c_p))
         for felt, navn in ((self.k_felt, "k"), (self.rho_felt, "rho"), (self.cp_felt, "c_p")):
             self._tallfelt(felt, navn, etter=self._nytt_materiale)
-        self.alfa_tekst = self.fig.text(0.47, 0.13, "", va="center", fontsize=9)
-        self.modus_knapp = self._knapp(self._akse(0.88, 0.11, 0.10), self.BYTT_TIL, lambda _: self._bytt_modus())
+        self.alfa_tekst = self.fig.text(0.47, rad2 + 0.021, "", va="center", fontsize=9)
+        self.modus_knapp = self._knapp(self._akse(0.88, rad2, 0.10), self.BYTT_TIL, lambda _: self._bytt_modus())
 
-        # Rad 3: varmekilder, Fourier og fart
-        self.kilde_felt = self._tekstboks(self._akse(0.15, 0.03, 0.07), "Kilde [°C] ", formater_tall(self.T_kilde))
+        # Rad 3: randbetingelser
+        self.rand_knapp = self._knapp(self._akse(0.07, rad3, 0.15), "", self._bytt_rand)
+        self._randfelt = self._bygg_randfelt(rad3)
+        self._vis_randvalg()
+
+        # Rad 4: varmekilder, Fourier og fart
+        self.kilde_felt = self._tekstboks(self._akse(0.15, rad4, 0.07), "Kilde [°C] ", formater_tall(self.T_kilde))
         self.bredde_felt = self._tekstboks(
-            self._akse(0.33, 0.03, 0.06), "Bredde [cm] ", formater_tall(self.bredde * 100)
+            self._akse(0.33, rad4, 0.06), "Bredde [cm] ", formater_tall(self.bredde * 100)
         )
         self._tallfelt(self.kilde_felt, "T_kilde", positiv=False, etter=self._juster_temperaturskala)
         self._tallfelt(self.bredde_felt, "bredde", skala=0.01)
         self.ledd_bryter = self._bryter(
-            self._akse(0.50, 0.03, 0.15), "Fourier-ledd", 1, self.MAKS_FOURIER_LEDD,
+            self._akse(0.50, rad4, 0.15), "Fourier-ledd", 1, self.MAKS_FOURIER_LEDD,
             valinit=min(fourier_ledd, self.MAKS_FOURIER_LEDD), valstep=1,
         )
         self.ledd_bryter.drawon = False
         self.ledd_bryter.on_changed(lambda _: self.tegn())
         self.fart_bryter = self._bryter(
-            self._akse(0.76, 0.03, 0.08), "Fart", 0, len(FARTER) - 1, valinit=FARTER.index(1.0), valstep=1
+            self._akse(0.76, rad4, 0.08), "Fart", 0, len(FARTER) - 1, valinit=FARTER.index(1.0), valstep=1
         )
         self.fart_bryter.drawon = False
         self.fart_bryter.valtext.set_text("×1")
         self.fart_bryter.on_changed(self._fart_endret)
-        self.nullstill_knapp = self._knapp(self._akse(0.88, 0.03, 0.10), "Nullstill", self._nullstill)
+        self.nullstill_knapp = self._knapp(self._akse(0.88, rad4, 0.10), "Nullstill", self._nullstill)
 
         self._tekstfelt = [self.tid_felt, self.slutt_felt, self.k_felt, self.rho_felt, self.cp_felt,
-                           self.kilde_felt, self.bredde_felt]
+                           self.kilde_felt, self.bredde_felt, *self._randfelt]
         self.timer = self.fig.canvas.new_timer(interval=15)
         self.timer.add_callback(self._tikk)
+
+    def _randtemperaturfelt(self, x: float, y: float, etikett: str, attributt: str) -> TextBox:
+        """Et tekstfelt for en randtemperatur. Ny verdi starter simuleringen på nytt."""
+        felt = self._tekstboks(self._akse(x, y, 0.07), etikett, formater_tall(getattr(self, attributt)))
+        self._tallfelt(felt, attributt, positiv=False, etter=self.simuler)
+        return felt
 
 
 class Stavvisning(_Visning):
@@ -465,8 +519,8 @@ class Stavvisning(_Visning):
     T_AKSE = (-50.0, 400.0)  # temperaturområdet aksen minst skal dekke [°C]
 
     def __init__(self, fig, lengde: float, innstillinger: dict, bytt_modus):
-        # Plotting: numerisk løsning i cellesentrene, forlenget flatt ut til endeflatene
-        # (ingen varmestrøm over kanten), og Fourier-rekka på et fint rutenett fra 0 til L.
+        # Plotting: numerisk løsning i cellesentrene, forlenget ut til endeflatene
+        # (se `_med_ender`), og Fourier-rekka på et fint rutenett fra 0 til L.
         rutenett = Rutenett.stav(lengde, self.ANTALL_CELLER)
         self.x_numerisk = np.concatenate([[0.0], rutenett.sentre[0], [lengde]])
         self.x_fourier = np.linspace(0.0, lengde, 1001)
@@ -475,14 +529,26 @@ class Stavvisning(_Visning):
     def _startbetingelse(self) -> np.ndarray:
         return varmt_segment(self.rutenett, self.L / 2, self.bredde, self.T_omgivelse, self.T_kilde)
 
-    @staticmethod
-    def _med_ender(u: np.ndarray) -> np.ndarray:
+    def _rand(self):
+        return ((self.T_venstre, self.T_hoyre),) if self.fast_rand else None
+
+    def _bygg_randfelt(self, y: float) -> list:
+        return [
+            self._randtemperaturfelt(0.34, y, "Venstre [°C] ", "T_venstre"),
+            self._randtemperaturfelt(0.53, y, "Høyre [°C] ", "T_hoyre"),
+        ]
+
+    def _med_ender(self, u: np.ndarray) -> np.ndarray:
+        """Celleverdiene forlenget ut til endeflatene: til den faste temperaturen
+        når enden holdes på den, ellers flatt (ingen varmestrøm over en isolert ende)."""
+        if self.fast_rand:
+            return np.concatenate([[self.T_venstre], u, [self.T_hoyre]])
         return np.concatenate([[u[0]], u, [u[-1]]])
 
     def _bygg_figur(self) -> None:
         L_cm = self.L * 100
-        self.ax_temp = self.fig.add_axes((0.07, 0.40, 0.91, 0.57))
-        self.ax_stav = self.fig.add_axes((0.07, 0.335, 0.91, 0.045), sharex=self.ax_temp)
+        self.ax_temp = self.fig.add_axes((0.07, 0.42, 0.91, 0.555))
+        self.ax_stav = self.fig.add_axes((0.07, 0.36, 0.91, 0.04), sharex=self.ax_temp)
 
         (self.numerisk_linje,) = self.ax_temp.plot(
             self.x_numerisk * 100, self._med_ender(self.u0), color="tab:red", lw=2, label="Numerisk"
@@ -507,16 +573,33 @@ class Stavvisning(_Visning):
         self.ax_stav.set_xlabel("x [cm]", labelpad=1)
 
     def _ny_start(self) -> None:
-        self.fourier = FourierCosinusrekke(self.u0, self.rutenett, self.alfa, self.MAKS_FOURIER_LEDD)
-        self.likevekt_linje.set_ydata([self.fourier.a[0]] * 2)
+        if self.fast_rand:
+            # Faste ender: sinusrekke, og likevekten er en rett linje mellom endetemperaturene
+            self.fourier = FourierSinusrekke(
+                self.u0, self.rutenett, self.alfa, self.T_venstre, self.T_hoyre, self.MAKS_FOURIER_LEDD
+            )
+            self.likevekt_linje.set_ydata([self.T_venstre, self.T_hoyre])
+        else:
+            # Isolerte ender: cosinusrekke, og likevekten er snittemperaturen
+            self.fourier = FourierCosinusrekke(self.u0, self.rutenett, self.alfa, self.MAKS_FOURIER_LEDD)
+            self.likevekt_linje.set_ydata([self.fourier.a[0]] * 2)
 
     def _likevekt(self) -> tuple:
-        return self.likevekt_tekst, f"Likevekt: {self.fourier.a[0]:.1f} °C"
+        if not self.fast_rand:
+            tekst = f"Likevekt: {self.fourier.a[0]:.1f} °C"
+        elif self.T_venstre == self.T_hoyre:
+            tekst = f"Likevekt: {self.T_venstre:g} °C"
+        else:
+            tekst = f"Likevekt: rett linje fra {self.T_venstre:g} til {self.T_hoyre:g} °C"
+        return self.likevekt_tekst, tekst
 
     def _juster_temperaturskala(self) -> None:
         """Temperaturaksen dekker minst T_AKSE, og utvides hvis noe er varmere/kaldere."""
-        T_min = min(self.T_AKSE[0], self.u0.min(), self.T_kilde)
-        T_maks = max(self.T_AKSE[1], self.u0.max(), self.T_kilde)
+        verdier = [self.u0.min(), self.u0.max(), self.T_kilde]
+        if self.fast_rand:
+            verdier += [self.T_venstre, self.T_hoyre]
+        T_min = min(self.T_AKSE[0], *verdier)
+        T_maks = max(self.T_AKSE[1], *verdier)
         margin = 0.03 * (T_maks - T_min)
         grenser = (T_min - margin, T_maks + margin)
         if tuple(self.ax_temp.get_ylim()) != grenser:
@@ -618,15 +701,21 @@ class Platevisning(_Visning):
         self.forsterket = False
         super().__init__(fig, rutenett, innstillinger, bytt_modus)
 
+    def _rand(self):
+        return ((self.T_kant, self.T_kant),) * 2 if self.fast_rand else None
+
+    def _bygg_randfelt(self, y: float) -> list:
+        return [self._randtemperaturfelt(0.34, y, "Kant [°C] ", "T_kant")]
+
     def _startbetingelse(self) -> np.ndarray:
         midten = (self.L / 2, self.L / 2)
         return varmt_segment(self.rutenett, midten, self.bredde, self.T_omgivelse, self.T_kilde)
 
     def _bygg_figur(self) -> None:
         L_cm = self.L * 100
-        self.ax_numerisk = self.fig.add_axes((0.07, 0.33, 0.40, 0.615))
+        self.ax_numerisk = self.fig.add_axes((0.065, 0.35, 0.41, 0.585))
         self.ax_fourier = self.fig.add_axes(
-            (0.515, 0.33, 0.40, 0.615), sharex=self.ax_numerisk, sharey=self.ax_numerisk
+            (0.505, 0.35, 0.41, 0.585), sharex=self.ax_numerisk, sharey=self.ax_numerisk
         )
         # Begge fargekartene deler fargeskala. Temperaturen lagres med x langs
         # første akse, mens imshow vil ha y som rader; derfor .T
@@ -640,19 +729,29 @@ class Platevisning(_Visning):
         self.ax_numerisk.set_ylabel("y [cm]")
         self.ax_fourier.tick_params(labelleft=False)
         self.fargesoyle = self.fig.colorbar(
-            self.numerisk_bilde, cax=self.fig.add_axes((0.93, 0.33, 0.015, 0.615))
+            self.numerisk_bilde, cax=self.fig.add_axes((0.93, 0.35, 0.015, 0.585))
         )
         self.fargesoyle.ax.set_title("°C", fontsize=9)
         self.ax_numerisk.set_title("Numerisk", fontsize=10)
         self.ax_fourier.set_title("Fourier-rekke", fontsize=10)
 
-        self.farge_knapp = self._knapp(self._akse(0.72, 0.11, 0.14), "Farger: lineære", self._bytt_fargeskala)
+        self.farge_knapp = self._knapp(
+            self._akse(0.72, self.RADER[1], 0.14), "Farger: lineære", self._bytt_fargeskala
+        )
 
     def _ny_start(self) -> None:
-        self.fourier = FourierCosinusrekke2D(self.u0, self.rutenett, self.alfa, self.MAKS_FOURIER_LEDD)
+        if self.fast_rand:
+            # Faste kanter: dobbel sinusrekke, og likevekten er kanttemperaturen
+            self.fourier = FourierSinusrekke2D(
+                self.u0, self.rutenett, self.alfa, self.T_kant, self.MAKS_FOURIER_LEDD
+            )
+        else:
+            # Isolerte kanter: dobbel cosinusrekke, og likevekten er snittemperaturen
+            self.fourier = FourierCosinusrekke2D(self.u0, self.rutenett, self.alfa, self.MAKS_FOURIER_LEDD)
 
     def _likevekt(self) -> tuple:
-        return self.ax_numerisk.title, f"Numerisk   (likevekt: {self.fourier.a[0, 0]:.1f} °C)"
+        likevekt = self.T_kant if self.fast_rand else self.fourier.a[0, 0]
+        return self.ax_numerisk.title, f"Numerisk   (likevekt: {likevekt:.1f} °C)"
 
     def _bytt_fargeskala(self, _=None) -> None:
         """Lineære farger: fargen følger temperaturen jevnt. Forsterkede: de lave
@@ -667,9 +766,11 @@ class Platevisning(_Visning):
         self.fig.canvas.draw_idle()  # fargesøylen er en del av bakgrunnen
 
     def _juster_temperaturskala(self) -> None:
-        """Fargeskalaen går fra grunntemperaturen til den varmeste kilden."""
-        lav = float(min(self.T_omgivelse, self.u0.min(), self.T_kilde))
-        hoy = float(max(self.u0.max(), self.T_kilde))
+        """Fargeskalaen går fra grunntemperaturen til den varmeste kilden (eller kanten)."""
+        verdier = [self.T_omgivelse, self.u0.min(), self.u0.max(), self.T_kilde]
+        if self.fast_rand:
+            verdier.append(self.T_kant)
+        lav, hoy = float(min(verdier)), float(max(verdier))
         if hoy - lav < 1e-9:
             hoy = lav + 1.0
         if (self.fargeskala.vmin, self.fargeskala.vmax) != (lav, hoy):
@@ -739,10 +840,12 @@ class Varmesimulering:
         T_omgivelse: float = 0.0,  # grunntemperatur [°C]
         T_kilde: float = 300.0,  # temperatur for varmekilder [°C]
         bredde: float = 0.10,  # bredde for varmekilder [m]
+        fast_rand: bool = False,  # False: isolerte kanter, True: fast temperatur på kantene
+        T_rand: float = 0.0,  # temperaturen kantene holdes på når fast_rand er valgt [°C]
         fourier_ledd: int = 20,
     ):
         self.lengde = lengde
-        self.fig = plt.figure(figsize=(10, 6.5))
+        self.fig = plt.figure(figsize=(10, 7))
         lerret = self.fig.canvas
         if lerret.manager is not None:
             lerret.manager.set_window_title("Varmesimulering")
@@ -755,7 +858,9 @@ class Varmesimulering:
         self.visning = None
         self.sett_modus(modus, {
             "k": materiale.varmeledningsevne, "rho": materiale.tetthet, "c_p": materiale.spesifikk_varme,
-            "T_omgivelse": T_omgivelse, "T_kilde": T_kilde, "bredde": bredde, "fourier_ledd": fourier_ledd,
+            "T_omgivelse": T_omgivelse, "T_kilde": T_kilde, "bredde": bredde,
+            "fast_rand": fast_rand, "T_venstre": T_rand, "T_hoyre": T_rand, "T_kant": T_rand,
+            "fourier_ledd": fourier_ledd,
         })
 
     def sett_modus(self, modus: str, innstillinger: dict | None = None) -> None:

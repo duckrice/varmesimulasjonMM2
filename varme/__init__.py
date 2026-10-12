@@ -3,6 +3,8 @@
 from .losere import (
     FourierCosinusrekke,
     FourierCosinusrekke2D,
+    FourierSinusrekke,
+    FourierSinusrekke2D,
     laplace_matrise,
     simuler_eksplisitt,
     stabilt_tidssteg,
@@ -16,6 +18,8 @@ __all__ = [
     "MATERIALER",
     "FourierCosinusrekke",
     "FourierCosinusrekke2D",
+    "FourierSinusrekke",
+    "FourierSinusrekke2D",
     "Materiale",
     "Rutenett",
     "Varmesimulering",
