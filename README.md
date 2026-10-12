@@ -54,6 +54,12 @@ Varmekildene får temperatur og bredde fra feltene *Kilde* og *Bredde*. Redigere
 | *Slutt [s]* | Hvor langt tidsbryteren går; mindre verdi gir finere kontroll |
 | *Fart* | Avspillingsfart fra ×0,05 til ×8 |
 
+## Les av temperaturen
+
+Skriv inn en posisjon i *Les av ved x [cm]* (og *y [cm]* for platen). Temperaturen i det punktet ved gjeldende tid vises til høyre, både for den numeriske løsningen og for Fourier-rekka. Et merke i figuren viser hvor det leses av.
+
+For å finne temperaturen i et bestemt punkt ved et bestemt tidspunkt: skriv inn tiden i *t [s]* og posisjonen i avlesningsfeltene.
+
 ## Andre innstillinger
 
 | Felt | Effekt |
