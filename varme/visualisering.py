@@ -50,10 +50,10 @@ class InteraktivStav:
         materiale: Materiale,
         lengde: float = 1.0,  # [m]
         antall_celler: int = 200,
-        T_omgivelse: float = 20.0,  # grunntemperatur [°C]
+        T_omgivelse: float = 0.0,  # grunntemperatur [°C]
         T_kilde: float = 300.0,  # temperatur for nye varmekilder [°C]
-        bredde: float = 0.05,  # bredde for nye varmekilder [m]
-        T_akse: tuple[float, float] = (0.0, 400.0),  # temperaturområde på aksen [°C]
+        bredde: float = 0.10,  # bredde for nye varmekilder [m]
+        T_akse: tuple[float, float] = (-50.0, 400.0),  # temperaturområde på aksen [°C]
         antall_bilder: int = 1000,  # lagrede tidspunkt; tider imellom regnes ut ved behov
         antall_steg: int = 1000,  # piltast/musehjul flytter 1/antall_steg av bryteren
         fourier_ledd: int = 20,

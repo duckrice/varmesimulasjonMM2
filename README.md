@@ -22,7 +22,7 @@ Gjøres direkte på grafen eller på staven:
 |---|---|
 | Venstreklikk | Legger til en varmekilde (temperatur og bredde fra feltene *Kilde* og *Bredde*) |
 | Venstre + dra | Tegner temperaturkurven fritt |
-| Høyreklikk / høyre + dra | Fjerner varme (tilbake til 20 °C) |
+| Høyreklikk / høyre + dra | Fjerner varme (tilbake til 0 °C) |
 | *Nullstill* | Fjerner alt |
 
 Redigerer du midt i en simulering, blir tilstanden der den nye starten (t = 0).
