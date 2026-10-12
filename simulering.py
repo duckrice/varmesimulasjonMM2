@@ -9,8 +9,9 @@ matplotlib.rcParams["toolbar"] = "None"
 
 import matplotlib.pyplot as plt  # noqa: E402
 
-from varme import MATERIALER, InteraktivStav  # noqa: E402
+from varme import MATERIALER, Varmesimulering  # noqa: E402
 
 if __name__ == "__main__":
-    stav = InteraktivStav(MATERIALER["kobber"], lengde=1.0)  # stavens lengde i meter
+    # modus: "1D" (stav) eller "2D" (plate). lengde: stavens lengde og platens sidekant i meter.
+    simulering = Varmesimulering(MATERIALER["kobber"], modus="1D", lengde=1.0)
     plt.show()

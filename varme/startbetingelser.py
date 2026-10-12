@@ -14,7 +14,7 @@ def varmt_segment(
 ) -> np.ndarray:
     """Hele domenet holder T_omgivelse, bortsett fra et varmt område med T_varm.
 
-    `sentrum` og `bredde` er tall i 1D, eller tupler med én verdi per akse i 2D/3D.
+    `sentrum` og `bredde` er tall i 1D, eller tupler med én verdi per akse i 2D.
     Cellene der cellesenteret ligger innenfor området blir varme.
     """
     sentrum = np.atleast_1d(sentrum)

@@ -1,4 +1,4 @@
-"""Cellesentrert rutenett i 1, 2 eller 3 dimensjoner.
+"""Cellesentrert rutenett for en stav (1D) eller en plate (2D).
 
 Domenet deles i like store celler, og temperaturen lagres i midten av hver
 celle. Det gjør isolerte ender enkle å håndtere: kanten av domenet ligger
