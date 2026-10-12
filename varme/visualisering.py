@@ -48,8 +48,8 @@ class InteraktivStav:
     def __init__(
         self,
         materiale: Materiale,
-        lengde: float = 0.5,  # [m]
-        antall_celler: int = 100,
+        lengde: float = 1.0,  # [m]
+        antall_celler: int = 200,
         T_omgivelse: float = 20.0,  # grunntemperatur [°C]
         T_kilde: float = 300.0,  # temperatur for nye varmekilder [°C]
         bredde: float = 0.05,  # bredde for nye varmekilder [m]

@@ -12,5 +12,5 @@ import matplotlib.pyplot as plt  # noqa: E402
 from varme import MATERIALER, InteraktivStav  # noqa: E402
 
 if __name__ == "__main__":
-    stav = InteraktivStav(MATERIALER["kobber"])
+    stav = InteraktivStav(MATERIALER["kobber"], lengde=1.0)  # stavens lengde i meter
     plt.show()
