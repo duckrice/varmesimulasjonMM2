@@ -39,6 +39,7 @@ from matplotlib.colors import Normalize, PowerNorm
 from matplotlib.patches import Rectangle
 from matplotlib.transforms import IdentityTransform
 from matplotlib.widgets import Button, Slider, TextBox
+from scipy import sparse
 from scipy.interpolate import RegularGridInterpolator
 
 from .losere import (
@@ -70,6 +71,18 @@ def les_tall(tekst: str) -> float:
 
 KNAPPEFARGE = "0.85"
 FELTFARGE = "0.95"
+
+
+def _interpolasjonsmatrise(fra: np.ndarray, til: np.ndarray) -> sparse.csr_matrix:
+    """Matrise W slik at W @ verdier gir lineær interpolasjon fra punktene `fra`
+    til punktene `til`. Hver rad har to tall: vektene til de to nærmeste punktene."""
+    i = np.clip(np.searchsorted(fra, til) - 1, 0, len(fra) - 2)
+    vekt = (til - fra[i]) / (fra[i + 1] - fra[i])
+    rad = np.arange(len(til))
+    return sparse.csr_matrix(
+        (np.concatenate([1 - vekt, vekt]), (np.concatenate([rad, rad]), np.concatenate([i, i + 1]))),
+        shape=(len(til), len(fra)),
+    )
 
 
 class _Knapp(Button):
@@ -143,10 +156,10 @@ class _Tekstfelt(TextBox):
 class _Fargekart(Artist):
     """Fargekart som fyller hele aksen, og som går raskt å tegne.
 
-    matplotlibs imshow bruker rundt 20 ms på å skalere et 100 × 100-kart opp til
-    skjermstørrelse hver gang det tegnes. Her fargelegges cellene først, og så
-    forstørres kartet ved å gjenta hver celle som en firkant av piksler. Det tar
-    et par millisekunder. `data` har y som rader, med første rad nederst.
+    matplotlibs imshow bruker rundt 20 ms på å skalere et kart opp til
+    skjermstørrelse hver gang det tegnes. Her fargelegges punktene først, og så
+    forstørres kartet ved å gjenta hvert punkt som en liten firkant av piksler.
+    Det tar noen få millisekunder. `data` har y som rader, med første rad nederst.
     """
 
     def __init__(self, akse, farger: ScalarMappable, data: np.ndarray):
@@ -969,6 +982,9 @@ class Platevisning(_Visning):
     ANTALL_CELLER = 100  # per retning
     ANTALL_BILDER = 200
     MAKS_FOURIER_LEDD = 200  # per retning
+    # Punkter per retning i fargekartene. Finere enn cellene, så fargene går jevnt over
+    # i hverandre i stedet for å vises som én firkant per celle.
+    FARGEKART_PUNKTER = 200
 
     def __init__(self, fig, lengde: float, innstillinger: dict, bytt_modus):
         rutenett = Rutenett((lengde, lengde), (self.ANTALL_CELLER, self.ANTALL_CELLER))
@@ -977,6 +993,12 @@ class Platevisning(_Visning):
         # Cellesentrene pluss kantene, til avlesning mellom cellene (se `_temperatur_i`)
         self.x_med_kanter = np.concatenate([[0.0], rutenett.sentre[0], [lengde]])
         self.y_med_kanter = np.concatenate([[0.0], rutenett.sentre[1], [lengde]])
+        # Punktene fargekartene tegnes i. Fourier-rekka regnes ut direkte der, mens den
+        # numeriske løsningen interpoleres dit fra cellene (se `_til_fargekart`).
+        self.x_kart = (np.arange(self.FARGEKART_PUNKTER) + 0.5) * lengde / self.FARGEKART_PUNKTER
+        self.y_kart = self.x_kart.copy()
+        self._til_kart_x = _interpolasjonsmatrise(self.x_med_kanter, self.x_kart)
+        self._til_kart_y = _interpolasjonsmatrise(self.y_med_kanter, self.y_kart)
         super().__init__(fig, rutenett, innstillinger, bytt_modus)
 
     def _rand(self):
@@ -1068,14 +1090,24 @@ class Platevisning(_Visning):
 
     def _oppdater_data(self) -> None:
         ledd = int(self.ledd_bryter.val)
-        self.numerisk_bilde.set_data(self.u.T)
-        self.fourier_bilde.set_data(self.fourier.evaluer(self.x, self.y, self.t, ledd).T)
+        self.numerisk_bilde.set_data(self._til_fargekart(self.u).T)
+        self.fourier_bilde.set_data(self.fourier.evaluer(self.x_kart, self.y_kart, self.t, ledd).T)
+
+    def _med_kanter(self, u: np.ndarray) -> np.ndarray:
+        """Celleverdiene med én ekstra rad/kolonne ytterst, for selve kantene: der
+        brukes kanttemperaturen når den er fast, ellers verdien i cellen innenfor."""
+        kant = dict(mode="constant", constant_values=self.T_kant) if self.fast_rand else dict(mode="edge")
+        return np.pad(u, 1, **kant)
+
+    def _til_fargekart(self, u: np.ndarray) -> np.ndarray:
+        """Den numeriske løsningen i fargekartets punkter, med jevn overgang
+        (bilineær interpolasjon) mellom cellesentrene: først langs x, så langs y."""
+        langs_x = self._til_kart_x @ self._med_kanter(u)
+        return (self._til_kart_y @ langs_x.T).T
 
     def _temperatur_i(self, x: float, y: float) -> tuple[float, float]:
-        # Numerisk: jevn overgang (bilineær interpolasjon) mellom cellesentrene. Ytterst
-        # brukes kanttemperaturen når den er fast, ellers verdien i cellen innenfor.
-        kant = dict(mode="constant", constant_values=self.T_kant) if self.fast_rand else dict(mode="edge")
-        celler = RegularGridInterpolator((self.x_med_kanter, self.y_med_kanter), np.pad(self.u, 1, **kant))
+        # Numerisk: jevn overgang (bilineær interpolasjon) mellom cellesentrene, som i fargekartet
+        celler = RegularGridInterpolator((self.x_med_kanter, self.y_med_kanter), self._med_kanter(self.u))
         numerisk = celler((x, y))
         fourier = self.fourier.evaluer(np.array([x]), np.array([y]), self.t, int(self.ledd_bryter.val))[0, 0]
         return float(numerisk), float(fourier)
