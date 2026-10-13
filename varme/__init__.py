@@ -1,5 +1,11 @@
 """Simulering av varmelikningen i en stav (1D) eller en plate (2D)."""
 
+import os
+
+# Én tråd i numpys matriseprodukt (se forklaringen i simulering.py). Virker bare
+# hvis numpy ikke er lastet ennå, derfor settes det også først i simulering.py.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
 from .losere import (
     FourierCosinusrekke,
     FourierCosinusrekke2D,

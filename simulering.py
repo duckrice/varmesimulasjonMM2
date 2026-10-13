@@ -3,7 +3,14 @@
 Kjør med:  .venv\\Scripts\\python.exe simulering.py
 """
 
-import matplotlib
+import os
+
+# Matrisene i dette prosjektet er små. numpys matriseprodukt bytter likevel til
+# mange tråder når de passerer en viss størrelse (f.eks. 200 Fourier-ledd), og da
+# går det rundt 50 ganger saktere enn med én tråd. Må settes før numpy lastes.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+import matplotlib  # noqa: E402
 
 matplotlib.rcParams["toolbar"] = "None"
 

@@ -186,7 +186,7 @@ class _Visning:
 
     ANTALL_BILDER = 1000  # lagrede tidspunkt; tider imellom regnes ut ved behov
     ANTALL_STEG = 1000  # piltast/musehjul flytter 1/ANTALL_STEG av tidsbryteren
-    MAKS_FOURIER_LEDD = 100
+    MAKS_FOURIER_LEDD = 200
     BYTT_TIL = ""  # teksten på knappen som bytter til den andre visningen
 
     def __init__(self, fig, rutenett: Rutenett, innstillinger: dict, bytt_modus):
@@ -968,7 +968,7 @@ class Platevisning(_Visning):
     BYTT_TIL = "Bytt til 1D"
     ANTALL_CELLER = 100  # per retning
     ANTALL_BILDER = 200
-    MAKS_FOURIER_LEDD = 60  # per retning
+    MAKS_FOURIER_LEDD = 200  # per retning
 
     def __init__(self, fig, lengde: float, innstillinger: dict, bytt_modus):
         rutenett = Rutenett((lengde, lengde), (self.ANTALL_CELLER, self.ANTALL_CELLER))

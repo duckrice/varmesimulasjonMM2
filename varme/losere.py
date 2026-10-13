@@ -115,6 +115,16 @@ def simuler_eksplisitt(
     return bilder
 
 
+def _demping(eksponent: np.ndarray) -> np.ndarray:
+    """exp(-eksponent), men nøyaktig 0 der resultatet uansett er forsvinnende lite.
+
+    Ledd med høy frekvens dør ut så fort at exp gir tall helt ned mot det minste
+    en datamaskin kan lagre. Slike «subnormale» tall regner prosessoren svært
+    sakte med, så vi setter dem til 0 (de er mindre enn 10^-260).
+    """
+    return np.where(eksponent < 600.0, np.exp(-np.minimum(eksponent, 600.0)), 0.0)
+
+
 def cosinus_operator(kanter: np.ndarray, antall_ledd: int) -> np.ndarray:
     """Matrise C slik at a = C @ u gir cosinus-koeffisientene a_0 … a_{N-1}
     langs én akse, når u er konstant innenfor hver celle:
@@ -173,7 +183,7 @@ class FourierCosinusrekke:
         """Summen av de første `antall_ledd` leddene (n = 0, 1, …, antall_ledd - 1)."""
         n = self.n[:antall_ledd]
         k = n * np.pi / self.L
-        demping = np.exp(-self.alfa * k**2 * t)
+        demping = _demping(self.alfa * k**2 * t)
         return (self.a[: len(n)] * demping) @ np.cos(np.outer(k, x))
 
 
@@ -206,7 +216,7 @@ class FourierSinusrekke:
     def evaluer(self, x: np.ndarray, t: float, antall_ledd: int | None = None) -> np.ndarray:
         """Likevekten pluss de første `antall_ledd` sinusleddene."""
         k = self.n[:antall_ledd] * np.pi / self.L
-        demping = np.exp(-self.alfa * k**2 * t)
+        demping = _demping(self.alfa * k**2 * t)
         return self.likevekt(x) + (self.b[: len(k)] * demping) @ np.sin(np.outer(k, x))
 
 
@@ -231,7 +241,7 @@ class FourierCosinusrekke2D:
     def evaluer(self, x: np.ndarray, y: np.ndarray, t: float, antall_ledd: int | None = None) -> np.ndarray:
         """Summen av de første `antall_ledd` × `antall_ledd` leddene, i punktene (x_i, y_j)."""
         kx, ky = self.kx[:antall_ledd], self.ky[:antall_ledd]
-        demping = np.exp(-self.alfa * t * (kx[:, np.newaxis] ** 2 + ky[np.newaxis, :] ** 2))
+        demping = _demping(self.alfa * t * (kx[:, np.newaxis] ** 2 + ky[np.newaxis, :] ** 2))
         a = self.a[: len(kx), : len(ky)] * demping
         return np.cos(np.outer(x, kx)) @ a @ np.cos(np.outer(ky, y))
 
@@ -257,6 +267,6 @@ class FourierSinusrekke2D:
     def evaluer(self, x: np.ndarray, y: np.ndarray, t: float, antall_ledd: int | None = None) -> np.ndarray:
         """T_kant pluss de første `antall_ledd` × `antall_ledd` leddene, i punktene (x_i, y_j)."""
         kx, ky = self.kx[:antall_ledd], self.ky[:antall_ledd]
-        demping = np.exp(-self.alfa * t * (kx[:, np.newaxis] ** 2 + ky[np.newaxis, :] ** 2))
+        demping = _demping(self.alfa * t * (kx[:, np.newaxis] ** 2 + ky[np.newaxis, :] ** 2))
         b = self.b[: len(kx), : len(ky)] * demping
         return self.T_kant + np.sin(np.outer(x, kx)) @ b @ np.sin(np.outer(ky, y))
