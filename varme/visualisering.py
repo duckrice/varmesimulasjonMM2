@@ -20,6 +20,10 @@ ved et valgt tidspunkt. Et merke i figuren viser hvor det leses av.
 Holder du musepekeren over grafen eller fargekartene, vises også posisjonen og
 temperaturen akkurat der pekeren er.
 
+Tiden vises i selve grafen/fargekartene, så den kommer med på skjermbilder.
+Knappene «Kopier …» legger grafen (eller ett fargekart med fargesøylen) på
+utklippstavlen, klar til å limes inn i et dokument.
+
 Tid:
 * Tidsbryteren er skalert i √t: halvveis på bryteren er en firedel av sluttiden.
   Da får starten, der det skjer mest, mest plass.
@@ -52,6 +56,7 @@ from .losere import (
 from .materialer import Materiale
 from .rutenett import Rutenett
 from .startbetingelser import varmt_segment
+from .utklippstavle import kopier_bilde
 
 VENSTRE, HOYRE = 1, 3
 
@@ -234,6 +239,7 @@ class _Visning:
         self._sveving = None  # (x, y, piksel_x, piksel_y) når musepekeren er over figuren
         self._widgets = []
         self._koblinger = []
+        self._kvitteringstimere = []
 
         self._bygg_figur()
         self._bygg_kontroller(innstillinger["fourier_ledd"])
@@ -265,6 +271,8 @@ class _Visning:
         """Kobler fra alt før figuren tømmes og den andre visningen bygges."""
         self._stopp()
         self.timer.stop()
+        for timer in self._kvitteringstimere:
+            timer.stop()
         for kobling in self._koblinger:
             self.fig.canvas.mpl_disconnect(kobling)
         for widget in self._widgets:
@@ -293,10 +301,6 @@ class _Visning:
 
     def _ny_start(self) -> None:
         """Kalles når starttemperaturen eller randen er endret: lager ny Fourier-rekke."""
-        raise NotImplementedError
-
-    def _likevekt(self) -> tuple:
-        """(tekstobjektet som viser likevektstemperaturen, teksten det skal ha)."""
         raise NotImplementedError
 
     def _data_artister(self) -> list:
@@ -338,11 +342,6 @@ class _Visning:
     def _juster_temperaturskala(self) -> None:
         raise NotImplementedError
 
-    def _vis_likevekt(self) -> None:
-        """Oppdaterer teksten med likevektstemperaturen."""
-        tekstobjekt, tekst = self._likevekt()
-        tekstobjekt.set_text(tekst)
-
     # --- Beregning -----------------------------------------------------------
 
     def _nytt_materiale(self) -> None:
@@ -373,7 +372,6 @@ class _Visning:
         self._antall_beregnet = 1
         self._forrige_viste = None
         self._ny_start()
-        self._vis_likevekt()
         self._juster_temperaturskala()
         self.vis_tid(t)
 
@@ -549,6 +547,46 @@ class _Visning:
         self._bakgrunn = self.fig.canvas.copy_from_bbox(self.fig.bbox)
         for artist in self._animerte_artister():
             self.fig.draw_artist(artist)
+
+    # --- Kopiering til utklippstavlen ---------------------------------------------
+
+    def _kopiknapp(self, akse, tekst: str, lag_bilde) -> Button:
+        """Knapp som kopierer bildet fra `lag_bilde()` til utklippstavlen, og
+        viser en kvittering på knappen en kort stund."""
+
+        def kopier(_) -> None:
+            try:
+                melding = kopier_bilde(lag_bilde())
+            except OSError:
+                melding = "Feilet"
+            knapp.label.set_text(melding)
+            self.fig.canvas.draw_idle()
+            timer = self.fig.canvas.new_timer(interval=1500)
+            timer.single_shot = True
+            timer.add_callback(lambda: (knapp.label.set_text(tekst), self.fig.canvas.draw_idle()))
+            timer.start()
+            self._kvitteringstimere.append(timer)
+
+        knapp = self._knapp(akse, tekst, kopier)
+        return knapp
+
+    def _skjermbilde(self) -> np.ndarray:
+        """Det vinduet viser akkurat nå, som piksler (øverste rad først)."""
+        self._sett_sveving(None)  # etiketten ved musepekeren skal ikke med
+        self.tegn()
+        return np.asarray(self.fig.canvas.buffer_rgba()).copy()
+
+    def _utsnitt(self, bilde: np.ndarray, *akser, marg: int = 4) -> tuple[int, int, int, int]:
+        """(venstre, topp, høyre, bunn) i `bilde` for området som dekker aksene,
+        med tittel, tall og akseetiketter."""
+        tegner = self.fig.canvas.get_renderer()
+        rammer = [akse.get_tightbbox(tegner) for akse in akser]
+        hoyde, bredde = bilde.shape[:2]
+        venstre = max(int(min(r.x0 for r in rammer)) - marg, 0)
+        hoyre = min(int(max(r.x1 for r in rammer)) + marg, bredde)
+        topp = max(hoyde - int(max(r.y1 for r in rammer)) - marg, 0)  # piksler regnes nedenfra
+        bunn = min(hoyde - int(min(r.y0 for r in rammer)) + marg, hoyde)
+        return venstre, topp, hoyre, bunn
 
     def _felt_endret(self, felt: _Tekstfelt) -> None:
         """Et tekstfelt har fått ny tekst eller flyttet skrivemerke. Teksten i
@@ -821,7 +859,7 @@ class Stavvisning(_Visning):
             [0.0], [0.0], "o", ms=7, markerfacecolor="none", markeredgecolor="black", visible=False
         )
         self.likevekt_tekst = self.ax_temp.text(
-            0.008, 0.975, "", transform=self.ax_temp.transAxes, va="top", fontsize=9, color="dimgray"
+            0.008, 0.975, "", transform=self.ax_temp.transAxes, va="top", fontsize=9.5, color="0.25"
         )
         self.ax_temp.set_xlim(0, L_cm)
         self.ax_temp.set_ylabel("Temperatur [°C]")
@@ -833,6 +871,16 @@ class Stavvisning(_Visning):
         )
         self.ax_stav.set_yticks([])
         self.ax_stav.set_xlabel("x [cm]", labelpad=1)
+
+        self.kopier_knapp = self._kopiknapp(
+            self._akse(0.80, self.RADER[3], 0.18), "Kopier grafen", self._bilde_av_grafen
+        )
+
+    def _bilde_av_grafen(self) -> np.ndarray:
+        """Grafen og staven, med akser og etiketter, slik de vises akkurat nå."""
+        bilde = self._skjermbilde()
+        venstre, topp, hoyre, bunn = self._utsnitt(bilde, self.ax_temp, self.ax_stav)
+        return bilde[topp:bunn, venstre:hoyre]
 
     def _ny_start(self) -> None:
         if self.fast_rand:
@@ -846,14 +894,12 @@ class Stavvisning(_Visning):
             self.fourier = FourierCosinusrekke(self.u0, self.rutenett, self.alfa, self.MAKS_FOURIER_LEDD)
             self.likevekt_linje.set_ydata([self.fourier.a[0]] * 2)
 
-    def _likevekt(self) -> tuple:
+    def _likevektstekst(self) -> str:
         if not self.fast_rand:
-            tekst = f"Likevekt: {self.fourier.a[0]:.1f} °C"
-        elif self.T_venstre == self.T_hoyre:
-            tekst = f"Likevekt: {self.T_venstre:g} °C"
-        else:
-            tekst = f"Likevekt: rett linje fra {self.T_venstre:g} til {self.T_hoyre:g} °C"
-        return self.likevekt_tekst, tekst
+            return f"Likevekt: {self.fourier.a[0]:.1f} °C"
+        if self.T_venstre == self.T_hoyre:
+            return f"Likevekt: {self.T_venstre:g} °C"
+        return f"Likevekt: rett linje fra {self.T_venstre:g} til {self.T_hoyre:g} °C"
 
     def _juster_temperaturskala(self) -> None:
         """Temperaturaksen dekker minst T_AKSE, og utvides hvis noe er varmere/kaldere."""
@@ -879,6 +925,10 @@ class Stavvisning(_Visning):
         self.fourier_linje.set_ydata(self.fourier.evaluer(self.x_fourier, self.t, ledd))
         self.stav_bilde.set_data(self.u[np.newaxis, :])
         self.les_prikk.set_data([self.les_x * 100], [self._avlesning()[0]])
+        # Tid, antall ledd og likevekt står i grafen, så de kommer med på skjermbilder
+        self.likevekt_tekst.set_text(
+            f"t = {self.t:.6g} s        Fourier: {ledd} ledd        {self._likevektstekst()}"
+        )
 
     def _temperatur_i(self, x: float, y: float | None = None) -> tuple[float, float]:
         # Numerisk: rett linje mellom cellesentrene, slik kurven er tegnet
@@ -1016,9 +1066,10 @@ class Platevisning(_Visning):
 
     def _bygg_figur(self) -> None:
         L_cm = self.L * 100
-        self.ax_numerisk = self.fig.add_axes((0.06, 0.38, 0.415, 0.553))
+        # Kvadratiske kart (figuren er 10 × 7,5), med plass til tallene på y-aksen mellom dem
+        self.ax_numerisk = self.fig.add_axes((0.07, 0.385, 0.3975, 0.53))
         self.ax_fourier = self.fig.add_axes(
-            (0.505, 0.38, 0.415, 0.553), sharex=self.ax_numerisk, sharey=self.ax_numerisk
+            (0.52, 0.385, 0.3975, 0.53), sharex=self.ax_numerisk, sharey=self.ax_numerisk
         )
         for akse in (self.ax_numerisk, self.ax_fourier):
             akse.set(xlim=(0, L_cm), ylim=(0, L_cm), aspect="equal")
@@ -1031,9 +1082,8 @@ class Platevisning(_Visning):
         self.ax_numerisk.set_xlabel("x [cm]", labelpad=1)
         self.ax_fourier.set_xlabel("x [cm]", labelpad=1)
         self.ax_numerisk.set_ylabel("y [cm]")
-        self.ax_fourier.tick_params(labelleft=False)
         self.fargesoyle = self.fig.colorbar(
-            self.farger, cax=self.fig.add_axes((0.935, 0.38, 0.015, 0.553))
+            self.farger, cax=self.fig.add_axes((0.935, 0.385, 0.015, 0.53))
         )
         self.fargesoyle.ax.set_title("°C", fontsize=9)
         self.ax_numerisk.set_title("Numerisk", fontsize=10)
@@ -1046,6 +1096,21 @@ class Platevisning(_Visning):
         self.farge_knapp = self._knapp(
             self._akse(0.72, self.RADER[2], 0.14), "Farger: lineære", self._bytt_fargeskala
         )
+        self.kopier_numerisk_knapp = self._kopiknapp(
+            self._akse(0.60, self.RADER[3], 0.18), "Kopier numerisk", lambda: self._bilde_av_kart(self.ax_numerisk)
+        )
+        self.kopier_fourier_knapp = self._kopiknapp(
+            self._akse(0.80, self.RADER[3], 0.18), "Kopier Fourier", lambda: self._bilde_av_kart(self.ax_fourier)
+        )
+
+    def _bilde_av_kart(self, akse) -> np.ndarray:
+        """Ett fargekart med akser og tittel, og fargesøylen ved siden av, slik
+        at fargeskalaen følger med."""
+        bilde = self._skjermbilde()
+        kart = self._utsnitt(bilde, akse)
+        soyle = self._utsnitt(bilde, self.fargesoyle.ax)
+        topp, bunn = min(kart[1], soyle[1]), max(kart[3], soyle[3])  # samme høyde på begge delene
+        return np.hstack([bilde[topp:bunn, kart[0] : kart[2]], bilde[topp:bunn, soyle[0] : soyle[2]]])
 
     def _ny_start(self) -> None:
         if self.fast_rand:
@@ -1056,10 +1121,6 @@ class Platevisning(_Visning):
         else:
             # Isolerte kanter: dobbel cosinusrekke, og likevekten er snittemperaturen
             self.fourier = FourierCosinusrekke2D(self.u0, self.rutenett, self.alfa, self.MAKS_FOURIER_LEDD)
-
-    def _likevekt(self) -> tuple:
-        likevekt = self.T_kant if self.fast_rand else self.fourier.a[0, 0]
-        return self.ax_numerisk.title, f"Numerisk   (likevekt: {likevekt:.1f} °C)"
 
     def _bytt_fargeskala(self, _=None) -> None:
         """Lineære farger: fargen følger temperaturen jevnt. Forsterkede: de lave
@@ -1086,12 +1147,16 @@ class Platevisning(_Visning):
 
     def _data_artister(self) -> list:
         return [self.numerisk_bilde, self.fourier_bilde, self.les_merke_numerisk, self.les_merke_fourier,
-                self.ax_numerisk.title]
+                self.ax_numerisk.title, self.ax_fourier.title]
 
     def _oppdater_data(self) -> None:
         ledd = int(self.ledd_bryter.val)
         self.numerisk_bilde.set_data(self._til_fargekart(self.u).T)
         self.fourier_bilde.set_data(self.fourier.evaluer(self.x_kart, self.y_kart, self.t, ledd).T)
+        # Tiden står i begge titlene, så hvert kart er komplett på et skjermbilde
+        likevekt = self.T_kant if self.fast_rand else self.fourier.a[0, 0]
+        self.ax_numerisk.title.set_text(f"Numerisk,  t = {self.t:.6g} s   (likevekt: {likevekt:.1f} °C)")
+        self.ax_fourier.title.set_text(f"Fourier-rekke, {ledd} × {ledd} ledd,  t = {self.t:.6g} s")
 
     def _med_kanter(self, u: np.ndarray) -> np.ndarray:
         """Celleverdiene med én ekstra rad/kolonne ytterst, for selve kantene: der

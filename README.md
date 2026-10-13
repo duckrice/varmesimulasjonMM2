@@ -62,6 +62,12 @@ For å finne temperaturen i et bestemt punkt ved et bestemt tidspunkt: skriv inn
 
 Du kan også holde musepekeren over grafen, staven eller fargekartene. Da vises posisjonen og temperaturen akkurat der pekeren er, i en liten etikett ved siden av den.
 
+## Kopier grafen
+
+Tiden står i selve grafen (øverst til venstre for staven, i titlene for platen), så den kommer med på skjermbilder.
+
+Knappen *Kopier grafen* legger grafen på utklippstavlen, slik at den kan limes rett inn i et dokument. For platen er det én knapp for hvert fargekart, *Kopier numerisk* og *Kopier Fourier*, og fargesøylen følger med i begge. På andre systemer enn Windows lagres bildet i stedet som en PNG-fil.
+
 ## Andre innstillinger
 
 | Felt | Effekt |
