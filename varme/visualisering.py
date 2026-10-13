@@ -1096,12 +1096,20 @@ class Platevisning(_Visning):
         self.farge_knapp = self._knapp(
             self._akse(0.72, self.RADER[2], 0.14), "Farger: lineære", self._bytt_fargeskala
         )
+        rad = self.RADER[3]
         self.kopier_numerisk_knapp = self._kopiknapp(
-            self._akse(0.60, self.RADER[3], 0.18), "Kopier numerisk", lambda: self._bilde_av_kart(self.ax_numerisk)
+            self._akse(0.44, rad, 0.17), "Kopier numerisk", lambda: self._bilde_av_kart(self.ax_numerisk)
         )
         self.kopier_fourier_knapp = self._kopiknapp(
-            self._akse(0.80, self.RADER[3], 0.18), "Kopier Fourier", lambda: self._bilde_av_kart(self.ax_fourier)
+            self._akse(0.625, rad, 0.17), "Kopier Fourier", lambda: self._bilde_av_kart(self.ax_fourier)
         )
+        self.kopier_begge_knapp = self._kopiknapp(self._akse(0.81, rad, 0.17), "Kopier begge", self._bilde_av_begge)
+
+    def _bilde_av_begge(self) -> np.ndarray:
+        """Begge fargekartene og fargesøylen, slik de står ved siden av hverandre i vinduet."""
+        bilde = self._skjermbilde()
+        venstre, topp, hoyre, bunn = self._utsnitt(bilde, self.ax_numerisk, self.ax_fourier, self.fargesoyle.ax)
+        return bilde[topp:bunn, venstre:hoyre]
 
     def _bilde_av_kart(self, akse) -> np.ndarray:
         """Ett fargekart med akser og tittel, og fargesøylen ved siden av, slik
