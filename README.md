@@ -60,6 +60,8 @@ Skriv inn en posisjon i *Les av ved x [cm]* (og *y [cm]* for platen). Temperatur
 
 For å finne temperaturen i et bestemt punkt ved et bestemt tidspunkt: skriv inn tiden i *t [s]* og posisjonen i avlesningsfeltene.
 
+Du kan også holde musepekeren over grafen, staven eller fargekartene. Da vises posisjonen og temperaturen akkurat der pekeren er, i en liten etikett ved siden av den.
+
 ## Andre innstillinger
 
 | Felt | Effekt |

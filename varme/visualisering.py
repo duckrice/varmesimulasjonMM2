@@ -17,6 +17,8 @@ Avlesning: skriv inn en posisjon i «Les av ved x [cm]» (og «y [cm]» for plat
 så vises temperaturen der ved gjeldende tid, for både den numeriske løsningen og
 Fourier-rekka. Sammen med feltet «t [s]» gir det eksakte verdier i et valgt punkt
 ved et valgt tidspunkt. Et merke i figuren viser hvor det leses av.
+Holder du musepekeren over grafen eller fargekartene, vises også posisjonen og
+temperaturen akkurat der pekeren er.
 
 Tid:
 * Tidsbryteren er skalert i √t: halvveis på bryteren er en firedel av sluttiden.
@@ -31,6 +33,7 @@ import time
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import Normalize, PowerNorm
+from matplotlib.transforms import IdentityTransform
 from matplotlib.widgets import Button, Slider, TextBox
 from scipy.interpolate import RegularGridInterpolator
 
@@ -102,6 +105,7 @@ class _Visning:
         self._redigering = None
         self._spiller = False
         self._bakgrunn = None
+        self._sveving = None  # (x, y, piksel_x, piksel_y) når musepekeren er over figuren
         self._widgets = []
         self._koblinger = []
 
@@ -109,7 +113,8 @@ class _Visning:
         self._bygg_kontroller(innstillinger["fourier_ledd"])
         for hendelse, funksjon in (
             ("button_press_event", self._trykk),
-            ("motion_notify_event", self._bevegelse),
+            ("motion_notify_event", self._mus_flyttet),
+            ("figure_leave_event", lambda _: self._sett_sveving(None)),
             ("button_release_event", self._slipp),
             ("draw_event", self._full_tegning),
             ("key_press_event", self._tast),
@@ -172,9 +177,20 @@ class _Visning:
         """Det i figuren som endrer seg med temperaturen, i den rekkefølgen det skal tegnes."""
         raise NotImplementedError
 
+    def _temperatur_i(self, x: float, y: float | None) -> tuple[float, float]:
+        """(numerisk, Fourier): temperaturen i punktet (x, y) [m] ved gjeldende tid."""
+        raise NotImplementedError
+
+    def _svevepunkt(self, hendelse) -> tuple | None:
+        """Punktet (x, y) [m] musepekeren er over, eller None utenfor grafen/fargekartene."""
+        raise NotImplementedError
+
+    def _posisjonstekst(self, x: float, y: float | None) -> str:
+        raise NotImplementedError
+
     def _avlesning(self) -> tuple[float, float]:
         """(numerisk, Fourier): temperaturen i avlesningspunktet ved gjeldende tid."""
-        raise NotImplementedError
+        return self._temperatur_i(self.les_x, self.les_y)
 
     def _flytt_merke(self) -> None:
         """Flytter merket i figuren til avlesningspunktet."""
@@ -288,9 +304,43 @@ class _Visning:
             self._endrer_kontroller = False
         self.tegn()
 
+    # --- Temperaturen under musepekeren -----------------------------------------
+
+    def _mus_flyttet(self, hendelse) -> None:
+        if self._redigering is not None:
+            self._bevegelse(hendelse)  # det tegnes eller males: ingen etikett
+        else:
+            self._sett_sveving(self._svevepunkt(hendelse), hendelse)
+
+    def _sett_sveving(self, punkt: tuple | None, hendelse=None) -> None:
+        """Viser, flytter eller skjuler etiketten ved musepekeren."""
+        if punkt is None and self._sveving is None:
+            return
+        self._sveving = None if punkt is None else (*punkt, hendelse.x, hendelse.y)
+        self._oppdater_sveving()
+        self._blit()
+
+    def _oppdater_sveving(self) -> None:
+        """Setter posisjon og temperatur inn i etiketten ved musepekeren."""
+        self.sveve_tekst.set_visible(self._sveving is not None)
+        if self._sveving is None:
+            return
+        x, y, piksel_x, piksel_y = self._sveving
+        numerisk, fourier = self._temperatur_i(x, y)
+        self.sveve_tekst.set_text(
+            f"{self._posisjonstekst(x, y)}\nNumerisk: {numerisk:.2f} °C\nFourier: {fourier:.2f} °C"
+        )
+        # Etiketten står skrått over pekeren, men flyttes til den andre siden nær kanten av vinduet
+        bredde, hoyde = self.fig.bbox.size
+        til_hoyre, oppover = piksel_x < 0.78 * bredde, piksel_y < 0.85 * hoyde
+        self.sveve_tekst.set_position((piksel_x + (14 if til_hoyre else -14), piksel_y + (12 if oppover else -12)))
+        self.sveve_tekst.set_ha("left" if til_hoyre else "right")
+        self.sveve_tekst.set_va("bottom" if oppover else "top")
+
     def _start_redigering(self) -> None:
         """Redigering midt i simuleringen: tilstanden nå blir den nye starten."""
         self._stopp()
+        self._sett_sveving(None)
         self.u0 = np.array(self.u, dtype=float)
 
     def _bytt_rand(self, _=None) -> None:
@@ -322,7 +372,7 @@ class _Visning:
         for bryter in (self.tid_bryter, self.ledd_bryter, self.fart_bryter):
             brytere += [bryter.poly, bryter._handle, bryter.valtext]
         avlesning = [self.les_numerisk_tekst, self.les_fourier_tekst]
-        return [*self._data_artister(), *brytere, self.tid_felt.text_disp, *avlesning]
+        return [*self._data_artister(), *brytere, self.tid_felt.text_disp, *avlesning, self.sveve_tekst]
 
     def _spill_pause(self, _=None) -> None:
         if self._spiller:
@@ -391,6 +441,7 @@ class _Visning:
         numerisk, fourier = self._avlesning()
         self.les_numerisk_tekst.set_text(f"{numerisk:.3f} °C")
         self.les_fourier_tekst.set_text(f"{fourier:.3f} °C")
+        self._oppdater_sveving()
         self._blit()
 
     def _nytt_avlesningspunkt(self) -> None:
@@ -547,6 +598,12 @@ class _Visning:
         self.timer = self.fig.canvas.new_timer(interval=15)
         self.timer.add_callback(self._tikk)
 
+        # Etiketten som følger musepekeren. Posisjonen settes i piksler.
+        self.sveve_tekst = self.fig.text(
+            0, 0, "", transform=IdentityTransform(), fontsize=8.5, linespacing=1.35, visible=False, zorder=10,
+            bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="0.45", alpha=0.93),
+        )
+
     def _bygg_avlesningsfelt(self, y: float) -> list:
         """Feltet for x-posisjonen der temperaturen leses av. Platen legger til et for y."""
         return [self._posisjonsfelt(0.20, y, "Les av ved x [cm] ", "les_x")]
@@ -614,6 +671,10 @@ class Stavvisning(_Visning):
         # Avlesningspunktet: en loddrett strek, og en prikk som følger den numeriske kurven
         self.les_strek = self.ax_temp.axvline(self.les_x * 100, color="black", lw=0.8, alpha=0.35)
         (self.les_prikk,) = self.ax_temp.plot([self.les_x * 100], [0.0], "o", color="black", ms=4.5)
+        # Ring på kurven der musepekeren er
+        (self.sveve_ring,) = self.ax_temp.plot(
+            [0.0], [0.0], "o", ms=7, markerfacecolor="none", markeredgecolor="black", visible=False
+        )
         self.likevekt_tekst = self.ax_temp.text(
             0.008, 0.975, "", transform=self.ax_temp.transAxes, va="top", fontsize=9, color="dimgray"
         )
@@ -664,7 +725,8 @@ class Stavvisning(_Visning):
             self.fig.canvas.draw_idle()  # aksen er en del av bakgrunnen
 
     def _data_artister(self) -> list:
-        return [self.stav_bilde, self.likevekt_linje, self.numerisk_linje, self.fourier_linje, self.les_prikk]
+        return [self.stav_bilde, self.likevekt_linje, self.numerisk_linje, self.fourier_linje,
+                self.les_prikk, self.sveve_ring]
 
     def _oppdater_data(self) -> None:
         ledd = int(self.ledd_bryter.val)
@@ -673,11 +735,26 @@ class Stavvisning(_Visning):
         self.stav_bilde.set_data(self.u[np.newaxis, :])
         self.les_prikk.set_data([self.les_x * 100], [self._avlesning()[0]])
 
-    def _avlesning(self) -> tuple[float, float]:
+    def _temperatur_i(self, x: float, y: float | None = None) -> tuple[float, float]:
         # Numerisk: rett linje mellom cellesentrene, slik kurven er tegnet
-        numerisk = np.interp(self.les_x, self.x_numerisk, self._med_ender(self.u))
-        fourier = self.fourier.evaluer(np.array([self.les_x]), self.t, int(self.ledd_bryter.val))[0]
+        numerisk = np.interp(x, self.x_numerisk, self._med_ender(self.u))
+        fourier = self.fourier.evaluer(np.array([x]), self.t, int(self.ledd_bryter.val))[0]
         return float(numerisk), float(fourier)
+
+    def _svevepunkt(self, hendelse) -> tuple | None:
+        if hendelse.inaxes in (self.ax_temp, self.ax_stav) and hendelse.xdata is not None:
+            return float(np.clip(hendelse.xdata / 100, 0.0, self.L)), None
+        return None
+
+    def _posisjonstekst(self, x: float, y: float | None) -> str:
+        return f"x = {x * 100:.1f} cm"
+
+    def _oppdater_sveving(self) -> None:
+        super()._oppdater_sveving()
+        self.sveve_ring.set_visible(self._sveving is not None)
+        if self._sveving is not None:
+            x = self._sveving[0]
+            self.sveve_ring.set_data([x * 100], [self._temperatur_i(x)[0]])
 
     def _flytt_merke(self) -> None:
         self.les_strek.set_xdata([self.les_x * 100] * 2)
@@ -765,7 +842,7 @@ class Platevisning(_Visning):
         rutenett = Rutenett((lengde, lengde), (self.ANTALL_CELLER, self.ANTALL_CELLER))
         self.y = rutenett.sentre[1]
         self.forsterket = False
-        # Cellesentrene pluss kantene, til avlesning mellom cellene (se `_avlesning`)
+        # Cellesentrene pluss kantene, til avlesning mellom cellene (se `_temperatur_i`)
         self.x_med_kanter = np.concatenate([[0.0], rutenett.sentre[0], [lengde]])
         self.y_med_kanter = np.concatenate([[0.0], rutenett.sentre[1], [lengde]])
         super().__init__(fig, rutenett, innstillinger, bytt_modus)
@@ -861,16 +938,23 @@ class Platevisning(_Visning):
         self.numerisk_bilde.set_data(self.u.T)
         self.fourier_bilde.set_data(self.fourier.evaluer(self.x, self.y, self.t, ledd).T)
 
-    def _avlesning(self) -> tuple[float, float]:
+    def _temperatur_i(self, x: float, y: float) -> tuple[float, float]:
         # Numerisk: jevn overgang (bilineær interpolasjon) mellom cellesentrene. Ytterst
         # brukes kanttemperaturen når den er fast, ellers verdien i cellen innenfor.
         kant = dict(mode="constant", constant_values=self.T_kant) if self.fast_rand else dict(mode="edge")
         celler = RegularGridInterpolator((self.x_med_kanter, self.y_med_kanter), np.pad(self.u, 1, **kant))
-        numerisk = celler((self.les_x, self.les_y))
-        fourier = self.fourier.evaluer(
-            np.array([self.les_x]), np.array([self.les_y]), self.t, int(self.ledd_bryter.val)
-        )[0, 0]
+        numerisk = celler((x, y))
+        fourier = self.fourier.evaluer(np.array([x]), np.array([y]), self.t, int(self.ledd_bryter.val))[0, 0]
         return float(numerisk), float(fourier)
+
+    def _svevepunkt(self, hendelse) -> tuple | None:
+        if hendelse.inaxes in (self.ax_numerisk, self.ax_fourier) and hendelse.xdata is not None:
+            return (float(np.clip(hendelse.xdata / 100, 0.0, self.L)),
+                    float(np.clip(hendelse.ydata / 100, 0.0, self.L)))
+        return None
+
+    def _posisjonstekst(self, x: float, y: float) -> str:
+        return f"x = {x * 100:.1f} cm,  y = {y * 100:.1f} cm"
 
     def _flytt_merke(self) -> None:
         for merke in (self.les_merke_numerisk, self.les_merke_fourier):
