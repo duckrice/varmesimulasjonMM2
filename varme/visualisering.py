@@ -32,7 +32,11 @@ import time
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib import cbook
+from matplotlib.artist import Artist
+from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize, PowerNorm
+from matplotlib.patches import Rectangle
 from matplotlib.transforms import IdentityTransform
 from matplotlib.widgets import Button, Slider, TextBox
 from scipy.interpolate import RegularGridInterpolator
@@ -62,6 +66,112 @@ def formater_tall(verdi: float) -> str:
 def les_tall(tekst: str) -> float:
     """Tolker tekst som tall, og godtar både komma og punktum som desimaltegn."""
     return float(tekst.strip().replace(",", "."))
+
+
+KNAPPEFARGE = "0.85"
+FELTFARGE = "0.95"
+
+
+class _Knapp(Button):
+    """Knapp som ikke skifter farge under musepekeren. Fargeskiftet til
+    matplotlibs Button tegner hele figuren på nytt, og selv uten fargeskifte
+    bruker den tid på hver eneste musebevegelse."""
+
+    def __init__(self, akse, tekst: str):
+        super().__init__(akse, tekst, color=KNAPPEFARGE, hovercolor=KNAPPEFARGE)
+
+    def _motion(self, event) -> None:
+        pass
+
+
+class _Tekstfelt(TextBox):
+    """Tekstfelt som ikke tegner hele figuren på nytt.
+
+    matplotlibs TextBox tegner hele figuren for hvert tastetrykk, hver gang
+    musepekeren går inn i eller ut av feltet, og ved hvert museklikk utenfor
+    feltet, også når ingen skriver i det. Med mange felt blir hvert klikk i
+    vinduet flere sekunder tregt. Her skifter ikke feltet farge under pekeren,
+    og når teksten eller skrivemerket endres, kalles `tegn(feltet)` i stedet,
+    slik at vinduet kan nøye seg med å tegne dette ene feltet.
+
+    `animert=True` brukes for et felt der teksten endres hele tiden (tiden under
+    avspilling); da tegnes teksten oppå bakgrunnen sammen med resten av det animerte.
+    """
+
+    def __init__(self, akse, etikett: str, tekst: str, tegn, animert: bool = False):
+        self._tegn = tegn
+        super().__init__(akse, etikett, tekst, textalignment="right", color=FELTFARGE, hovercolor=FELTFARGE)
+        self.text_disp.set_animated(animert)
+        self.cursor.set_animated(animert)
+
+    def _motion(self, event) -> None:
+        pass  # ingen fargeskifte under musepekeren (se _Knapp)
+
+    def _keypress(self, event) -> None:
+        if self.capturekeystrokes and event.key in ("enter", "return") and not self.ignore(event):
+            # Enter sender inn verdien og avslutter skrivingen, slik at f.eks. piltastene
+            # virker igjen. (Originalen sender inn, men blir stående i skrivemodus.)
+            self.stop_typing()
+        else:
+            super()._keypress(event)
+
+    def _rendercursor(self) -> None:
+        # Originalen flytter skrivemerket og avslutter med å tegne hele figuren.
+        # Vi lar den flytte merket, men hopper over tegningen.
+        lerret = self.ax.get_figure(root=True).canvas
+        lerret.draw = lambda *args, **kwargs: None  # skygger metoden på dette ene lerretet
+        try:
+            super()._rendercursor()
+        finally:
+            del lerret.draw
+        if not self.capturekeystrokes:
+            self.cursor.set_visible(False)  # originalen viser merket også når ingen skriver
+        self._tegn(self)
+
+    def stop_typing(self) -> None:
+        if not self.capturekeystrokes:
+            return  # ingen skriver her, så det er ingenting å rydde opp eller tegne
+        self._on_stop_typing()  # slår på igjen matplotlibs hurtigtaster
+        self._on_stop_typing = None
+        self.capturekeystrokes = False
+        self.cursor.set_visible(False)
+        self._tegn(self)
+        if self.eventson:
+            self._observers.process("submit", self.text)
+
+
+class _Fargekart(Artist):
+    """Fargekart som fyller hele aksen, og som går raskt å tegne.
+
+    matplotlibs imshow bruker rundt 20 ms på å skalere et 100 × 100-kart opp til
+    skjermstørrelse hver gang det tegnes. Her fargelegges cellene først, og så
+    forstørres kartet ved å gjenta hver celle som en firkant av piksler. Det tar
+    et par millisekunder. `data` har y som rader, med første rad nederst.
+    """
+
+    def __init__(self, akse, farger: ScalarMappable, data: np.ndarray):
+        super().__init__()
+        self.farger = farger  # fargeskala og fargekart, delt med fargesøylen
+        self._data = data
+        akse.add_artist(self)
+
+    def set_data(self, data: np.ndarray) -> None:
+        self._data = data
+        self.stale = True
+
+    def draw(self, renderer) -> None:
+        if not self.get_visible():
+            return
+        x0, y0, x1, y1 = np.round(self.axes.bbox.extents).astype(int)  # aksen i piksler
+        rader, kolonner = self._data.shape
+        rad = np.arange(y1 - y0) * rader // (y1 - y0)  # hvilken celle hver piksel hører til
+        kolonne = np.arange(x1 - x0) * kolonner // (x1 - x0)
+        celler = self.farger.to_rgba(self._data, bytes=True)
+        gc = renderer.new_gc()
+        # take langs én akse om gangen er flere ganger raskere enn celler[rad[:, None], kolonne]
+        renderer.draw_image(gc, x0, y0, celler.take(rad, axis=0).take(kolonne, axis=1))
+        gc.restore()
+        self.stale = False
 
 
 class _Visning:
@@ -105,6 +215,9 @@ class _Visning:
         self._redigering = None
         self._spiller = False
         self._bakgrunn = None
+        # Brukes til å viske ut innsiden av et tekstfelt (se `_felt_endret`). Posisjon i piksler.
+        self._viskelaer = Rectangle((0, 0), 1, 1, transform=IdentityTransform(), facecolor=FELTFARGE, edgecolor="none")
+        self._viskelaer.set_figure(fig)
         self._sveving = None  # (x, y, piksel_x, piksel_y) når musepekeren er over figuren
         self._widgets = []
         self._koblinger = []
@@ -207,21 +320,15 @@ class _Visning:
         raise NotImplementedError
 
     def _slipp(self, hendelse) -> None:
-        if self._redigering is not None:
-            self._redigering = None
-            self._vis_likevekt()
+        self._redigering = None
 
     def _juster_temperaturskala(self) -> None:
         raise NotImplementedError
 
     def _vis_likevekt(self) -> None:
-        """Oppdaterer teksten med likevektstemperaturen. Den er en del av
-        bakgrunnen (tekst er tregt å tegne), så mens man drar med musa venter
-        vi til knappen slippes."""
+        """Oppdaterer teksten med likevektstemperaturen."""
         tekstobjekt, tekst = self._likevekt()
-        if self._redigering is None and tekstobjekt.get_text() != tekst:
-            tekstobjekt.set_text(tekst)
-            self.fig.canvas.draw_idle()
+        tekstobjekt.set_text(tekst)
 
     # --- Beregning -----------------------------------------------------------
 
@@ -317,12 +424,14 @@ class _Visning:
         if punkt is None and self._sveving is None:
             return
         self._sveving = None if punkt is None else (*punkt, hendelse.x, hendelse.y)
-        self._oppdater_sveving()
-        self._blit()
+        if not self._spiller:  # under avspilling oppdateres etiketten uansett med neste bilde
+            self._oppdater_sveving()
+            self._blit()
 
     def _oppdater_sveving(self) -> None:
         """Setter posisjon og temperatur inn i etiketten ved musepekeren."""
         self.sveve_tekst.set_visible(self._sveving is not None)
+        self.sveve_ramme.set_visible(self._sveving is not None)
         if self._sveving is None:
             return
         x, y, piksel_x, piksel_y = self._sveving
@@ -336,6 +445,9 @@ class _Visning:
         self.sveve_tekst.set_position((piksel_x + (14 if til_hoyre else -14), piksel_y + (12 if oppover else -12)))
         self.sveve_tekst.set_ha("left" if til_hoyre else "right")
         self.sveve_tekst.set_va("bottom" if oppover else "top")
+        # Rammen bak teksten: et enkelt rektangel litt større enn teksten
+        tekst = self.sveve_tekst.get_window_extent(self.fig.canvas.get_renderer())
+        self.sveve_ramme.set_bounds(tekst.x0 - 5, tekst.y0 - 4, tekst.width + 10, tekst.height + 8)
 
     def _start_redigering(self) -> None:
         """Redigering midt i simuleringen: tilstanden nå blir den nye starten."""
@@ -371,8 +483,9 @@ class _Visning:
         brytere = []
         for bryter in (self.tid_bryter, self.ledd_bryter, self.fart_bryter):
             brytere += [bryter.poly, bryter._handle, bryter.valtext]
+        tid = [self.tid_felt.text_disp, self.tid_felt.cursor]
         avlesning = [self.les_numerisk_tekst, self.les_fourier_tekst]
-        return [*self._data_artister(), *brytere, self.tid_felt.text_disp, *avlesning, self.sveve_tekst]
+        return [*self._data_artister(), *brytere, *tid, *avlesning, self.sveve_ramme, self.sveve_tekst]
 
     def _spill_pause(self, _=None) -> None:
         if self._spiller:
@@ -424,6 +537,22 @@ class _Visning:
         for artist in self._animerte_artister():
             self.fig.draw_artist(artist)
 
+    def _felt_endret(self, felt: _Tekstfelt) -> None:
+        """Et tekstfelt har fått ny tekst eller flyttet skrivemerke. Teksten i
+        feltene ligger i bakgrunnen, så vi maler bare dette ene feltet på nytt
+        der, i stedet for å tegne hele figuren."""
+        if self._bakgrunn is not None and felt.ax.get_visible() and not felt.text_disp.get_animated():
+            lerret = self.fig.canvas
+            lerret.restore_region(self._bakgrunn)
+            # Visk ut innsiden av feltet og tegn teksten på nytt. Rammen røres ikke:
+            # tegnes den oppå seg selv gang på gang, blir den tykkere og tykkere.
+            x0, y0, x1, y1 = felt.ax.bbox.extents
+            self._viskelaer.set_bounds(x0 + 2, y0 + 2, x1 - x0 - 4, y1 - y0 - 4)
+            for artist in (self._viskelaer, felt.text_disp, felt.cursor):
+                self.fig.draw_artist(artist)
+            self._bakgrunn = lerret.copy_from_bbox(self.fig.bbox)
+        self._blit()
+
     def _blit(self) -> None:
         """Viser bakgrunnen med de animerte delene tegnet oppå."""
         lerret = self.fig.canvas
@@ -472,8 +601,6 @@ class _Visning:
             felt.set_val(tekst)
         finally:
             self._endrer_kontroller = False
-        if not felt.capturekeystrokes:
-            felt.cursor.set_visible(False)  # set_val viser skrivemerket selv om ingen skriver
 
     def _tallfelt(self, felt: TextBox, attributt: str, skala: float = 1.0, positiv: bool = True,
                   grenser: tuple[float, float] | None = None, etter=None):
@@ -519,13 +646,13 @@ class _Visning:
         return self.fig.add_axes((x, y, bredde, hoyde))
 
     def _knapp(self, akse, tekst: str, funksjon) -> Button:
-        knapp = Button(akse, tekst)
+        knapp = _Knapp(akse, tekst)
         knapp.on_clicked(funksjon)
         self._widgets.append(knapp)
         return knapp
 
-    def _tekstboks(self, akse, etikett: str, tekst: str = "") -> TextBox:
-        felt = TextBox(akse, etikett, tekst, textalignment="right")
+    def _tekstboks(self, akse, etikett: str, tekst: str = "", animert: bool = False) -> TextBox:
+        felt = _Tekstfelt(akse, etikett, tekst, tegn=self._felt_endret, animert=animert)
         self._widgets.append(felt)
         return felt
 
@@ -545,7 +672,7 @@ class _Visning:
         self.tid_bryter.on_changed(
             lambda p: None if self._endrer_kontroller else self.vis_tid(self.tid_fra_bryter(p))
         )
-        self.tid_felt = self._tekstboks(self._akse(0.66, rad1, 0.10), "t [s] ")
+        self.tid_felt = self._tekstboks(self._akse(0.66, rad1, 0.10), "t [s] ", animert=True)
         self.tid_felt.on_submit(self._tid_skrevet)
         self.slutt_felt = self._tekstboks(self._akse(0.88, rad1, 0.10), "Slutt [s] ")
         self._tallfelt(self.slutt_felt, "t_slutt", etter=lambda: self._ny_tidsakse(behold_tid=True))
@@ -598,10 +725,15 @@ class _Visning:
         self.timer = self.fig.canvas.new_timer(interval=15)
         self.timer.add_callback(self._tikk)
 
-        # Etiketten som følger musepekeren. Posisjonen settes i piksler.
+        # Etiketten som følger musepekeren, med et rektangel som ramme. Posisjonen settes
+        # i piksler. (Tekstens innebygde ramme, `bbox`, tar like lang tid å tegne som teksten.)
+        self.sveve_ramme = Rectangle(
+            (0, 0), 1, 1, transform=IdentityTransform(), facecolor="white", edgecolor="0.45", linewidth=0.8,
+            alpha=0.93, visible=False,
+        )
+        self.fig.add_artist(self.sveve_ramme)
         self.sveve_tekst = self.fig.text(
-            0, 0, "", transform=IdentityTransform(), fontsize=8.5, linespacing=1.35, visible=False, zorder=10,
-            bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="0.45", alpha=0.93),
+            0, 0, "", transform=IdentityTransform(), fontsize=8.5, linespacing=1.35, visible=False
         )
 
     def _bygg_avlesningsfelt(self, y: float) -> list:
@@ -726,7 +858,7 @@ class Stavvisning(_Visning):
 
     def _data_artister(self) -> list:
         return [self.stav_bilde, self.likevekt_linje, self.numerisk_linje, self.fourier_linje,
-                self.les_prikk, self.sveve_ring]
+                self.les_prikk, self.sveve_ring, self.likevekt_tekst]
 
     def _oppdater_data(self) -> None:
         ledd = int(self.ledd_bryter.val)
@@ -866,19 +998,20 @@ class Platevisning(_Visning):
         self.ax_fourier = self.fig.add_axes(
             (0.505, 0.38, 0.415, 0.553), sharex=self.ax_numerisk, sharey=self.ax_numerisk
         )
-        # Begge fargekartene deler fargeskala. Temperaturen lagres med x langs
-        # første akse, mens imshow vil ha y som rader; derfor .T
+        for akse in (self.ax_numerisk, self.ax_fourier):
+            akse.set(xlim=(0, L_cm), ylim=(0, L_cm), aspect="equal")
+        # Begge fargekartene og fargesøylen deler fargeskala. Temperaturen lagres med
+        # x langs første akse, mens fargekartet vil ha y som rader; derfor .T
         self.fargeskala = Normalize(0.0, 1.0)
-        valg = dict(origin="lower", extent=(0, L_cm, 0, L_cm), cmap="inferno", norm=self.fargeskala,
-                    interpolation="nearest")
-        self.numerisk_bilde = self.ax_numerisk.imshow(self.u0.T, **valg)
-        self.fourier_bilde = self.ax_fourier.imshow(self.u0.T, **valg)
+        self.farger = ScalarMappable(norm=self.fargeskala, cmap="inferno")
+        self.numerisk_bilde = _Fargekart(self.ax_numerisk, self.farger, self.u0.T)
+        self.fourier_bilde = _Fargekart(self.ax_fourier, self.farger, self.u0.T)
         self.ax_numerisk.set_xlabel("x [cm]", labelpad=1)
         self.ax_fourier.set_xlabel("x [cm]", labelpad=1)
         self.ax_numerisk.set_ylabel("y [cm]")
         self.ax_fourier.tick_params(labelleft=False)
         self.fargesoyle = self.fig.colorbar(
-            self.numerisk_bilde, cax=self.fig.add_axes((0.935, 0.38, 0.015, 0.553))
+            self.farger, cax=self.fig.add_axes((0.935, 0.38, 0.015, 0.553))
         )
         self.fargesoyle.ax.set_title("°C", fontsize=9)
         self.ax_numerisk.set_title("Numerisk", fontsize=10)
@@ -913,9 +1046,8 @@ class Platevisning(_Visning):
         self.farge_knapp.label.set_text("Farger: forsterket" if self.forsterket else "Farger: lineære")
         lav, hoy = self.fargeskala.vmin, self.fargeskala.vmax
         self.fargeskala = PowerNorm(0.4, lav, hoy) if self.forsterket else Normalize(lav, hoy)
-        self.numerisk_bilde.set_norm(self.fargeskala)
-        self.fourier_bilde.set_norm(self.fargeskala)
-        self.fargesoyle.update_normal(self.numerisk_bilde)
+        self.farger.set_norm(self.fargeskala)
+        self.fargesoyle.update_normal(self.farger)
         self.fig.canvas.draw_idle()  # fargesøylen er en del av bakgrunnen
 
     def _juster_temperaturskala(self) -> None:
@@ -931,7 +1063,8 @@ class Platevisning(_Visning):
             self.fig.canvas.draw_idle()  # fargesøylen er en del av bakgrunnen
 
     def _data_artister(self) -> list:
-        return [self.numerisk_bilde, self.fourier_bilde, self.les_merke_numerisk, self.les_merke_fourier]
+        return [self.numerisk_bilde, self.fourier_bilde, self.les_merke_numerisk, self.les_merke_fourier,
+                self.ax_numerisk.title]
 
     def _oppdater_data(self) -> None:
         ledd = int(self.ledd_bryter.val)
@@ -1030,6 +1163,11 @@ class Varmesimulering:
             if hasattr(lerret, egenskap):  # ipympl i Jupyter
                 setattr(lerret, egenskap, False)
 
+        # matplotlib finner aksen under musepekeren ved å spørre hver akse i tur og
+        # orden, to ganger per musebevegelse. Med over 20 akser (hver knapp og hvert
+        # felt er en akse) tar det merkbar tid, så lerretet får en raskere utgave.
+        lerret.inaxes = self._akse_under
+
         self.visning = None
         self.sett_modus(modus, {
             "k": materiale.varmeledningsevne, "rho": materiale.tetthet, "c_p": materiale.spesifikk_varme,
@@ -1038,6 +1176,12 @@ class Varmesimulering:
             "les_x": lengde / 2, "les_y": lengde / 2,
             "fourier_ledd": fourier_ledd,
         })
+
+    def _akse_under(self, punkt: tuple[float, float]):
+        """Aksen under et punkt (i piksler), eller None. Gjør det samme som
+        lerretets egen `inaxes`, men tester bare mot aksenes rektangler."""
+        treff = [akse for akse in self.fig.get_axes() if akse.get_visible() and akse.bbox.contains(*punkt)]
+        return cbook._topmost_artist(treff) if treff else None
 
     def sett_modus(self, modus: str, innstillinger: dict | None = None) -> None:
         """Bygger vinduet på nytt som stav ("1D") eller plate ("2D")."""
