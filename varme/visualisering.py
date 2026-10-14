@@ -315,6 +315,11 @@ class _Visning:
         """Punktet (x, y) [m] musepekeren er over, eller None utenfor grafen/fargekartene."""
         raise NotImplementedError
 
+    def _storste_avvik(self) -> float:
+        """Største avvik mellom Fourier-rekka og den numeriske løsningen ved gjeldende
+        tid. Måles i cellesentrene, der den numeriske løsningen faktisk er regnet ut."""
+        raise NotImplementedError
+
     def _posisjonstekst(self, x: float, y: float | None) -> str:
         raise NotImplementedError
 
@@ -449,6 +454,7 @@ class _Visning:
         numerisk, fourier = self._temperatur_i(x, y)
         self.sveve_tekst.set_text(
             f"{self._posisjonstekst(x, y)}\nNumerisk: {numerisk:.2f} °C\nFourier: {fourier:.2f} °C"
+            f"\nDifferanse (F − N): {fourier - numerisk:+.3f} °C"
         )
         # Etiketten står skrått over pekeren, men flyttes til den andre siden nær kanten av vinduet
         bredde, hoyde = self.fig.bbox.size
@@ -928,7 +934,12 @@ class Stavvisning(_Visning):
         # Tid, antall ledd og likevekt står i grafen, så de kommer med på skjermbilder
         self.likevekt_tekst.set_text(
             f"t = {self.t:.6g} s        Fourier: {ledd} ledd        {self._likevektstekst()}"
+            f"        Største avvik: {self._storste_avvik():.3f} °C"
         )
+
+    def _storste_avvik(self) -> float:
+        fourier = self.fourier.evaluer(self.x, self.t, int(self.ledd_bryter.val))
+        return float(np.abs(fourier - self.u).max())
 
     def _temperatur_i(self, x: float, y: float | None = None) -> tuple[float, float]:
         # Numerisk: rett linje mellom cellesentrene, slik kurven er tegnet
@@ -1164,7 +1175,14 @@ class Platevisning(_Visning):
         # Tiden står i begge titlene, så hvert kart er komplett på et skjermbilde
         likevekt = self.T_kant if self.fast_rand else self.fourier.a[0, 0]
         self.ax_numerisk.title.set_text(f"Numerisk,  t = {self.t:.6g} s   (likevekt: {likevekt:.1f} °C)")
-        self.ax_fourier.title.set_text(f"Fourier-rekke, {ledd} × {ledd} ledd,  t = {self.t:.6g} s")
+        self.ax_fourier.title.set_text(
+            f"Fourier-rekke, {ledd} × {ledd} ledd,  t = {self.t:.6g} s\n"
+            f"Største avvik fra numerisk: {self._storste_avvik():.3f} °C"
+        )
+
+    def _storste_avvik(self) -> float:
+        fourier = self.fourier.evaluer(self.x, self.y, self.t, int(self.ledd_bryter.val))
+        return float(np.abs(fourier - self.u).max())
 
     def _med_kanter(self, u: np.ndarray) -> np.ndarray:
         """Celleverdiene med én ekstra rad/kolonne ytterst, for selve kantene: der
