@@ -62,7 +62,7 @@ Skriv inn en posisjon i *Les av ved x [cm]* (og *y [cm]* for platen). Temperatur
 
 For å finne temperaturen i et bestemt punkt ved et bestemt tidspunkt: skriv inn tiden i *t [s]* og posisjonen i avlesningsfeltene.
 
-Du kan også holde musepekeren over grafen, staven eller fargekartene. Da vises posisjonen og temperaturen akkurat der pekeren er, i en liten etikett ved siden av den.
+Du kan også holde musepekeren over grafen, staven eller fargekartene. Da vises temperaturen i cellesenteret nærmest pekeren, i en liten etikett ved siden av den, sammen med differansen mellom Fourier-rekka og den numeriske løsningen der. «Største avvik» øverst i grafen (eller i tittelen til Fourier-kartet) er den største slike differansen over alle cellesentrene.
 
 ## Kopier grafen
 

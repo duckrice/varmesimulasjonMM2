@@ -17,8 +17,9 @@ Avlesning: skriv inn en posisjon i «Les av ved x [cm]» (og «y [cm]» for plat
 så vises temperaturen der ved gjeldende tid, for både den numeriske løsningen og
 Fourier-rekka. Sammen med feltet «t [s]» gir det eksakte verdier i et valgt punkt
 ved et valgt tidspunkt. Et merke i figuren viser hvor det leses av.
-Holder du musepekeren over grafen eller fargekartene, vises også posisjonen og
-temperaturen akkurat der pekeren er.
+Holder du musepekeren over grafen eller fargekartene, vises temperaturen i
+cellesenteret nærmest pekeren. Der er den numeriske løsningen faktisk regnet ut,
+så differansen der kan sammenlignes direkte med «største avvik».
 
 Tiden vises i selve grafen/fargekartene, så den kommer med på skjermbilder.
 Knappene «Kopier …» legger grafen (eller ett fargekart med fargesøylen) på
@@ -312,8 +313,18 @@ class _Visning:
         raise NotImplementedError
 
     def _svevepunkt(self, hendelse) -> tuple | None:
-        """Punktet (x, y) [m] musepekeren er over, eller None utenfor grafen/fargekartene."""
+        """Cellesenteret (x, y) [m] nærmest musepekeren, eller None utenfor grafen/fargekartene.
+
+        Etiketten viser verdiene i cellesenteret og ikke akkurat der pekeren er:
+        mellom cellesentrene er den numeriske løsningen bare en rett linje mellom
+        nabocellene, og der kan differansen bli større enn «største avvik» (som
+        måles i cellesentrene) uten at metodene egentlig er mer uenige.
+        """
         raise NotImplementedError
+
+    @staticmethod
+    def _naermeste(sentre: np.ndarray, verdi: float) -> float:
+        return float(sentre[np.argmin(np.abs(sentre - verdi))])
 
     def _storste_avvik(self) -> float:
         """Største avvik mellom Fourier-rekka og den numeriske løsningen ved gjeldende
@@ -934,7 +945,7 @@ class Stavvisning(_Visning):
         # Tid, antall ledd og likevekt står i grafen, så de kommer med på skjermbilder
         self.likevekt_tekst.set_text(
             f"t = {self.t:.6g} s        Fourier: {ledd} ledd        {self._likevektstekst()}"
-            f"        Største avvik: {self._storste_avvik():.3f} °C"
+            f"        Største avvik i cellesentrene: {self._storste_avvik():.3f} °C"
         )
 
     def _storste_avvik(self) -> float:
@@ -949,11 +960,11 @@ class Stavvisning(_Visning):
 
     def _svevepunkt(self, hendelse) -> tuple | None:
         if hendelse.inaxes in (self.ax_temp, self.ax_stav) and hendelse.xdata is not None:
-            return float(np.clip(hendelse.xdata / 100, 0.0, self.L)), None
+            return self._naermeste(self.x, hendelse.xdata / 100), None
         return None
 
     def _posisjonstekst(self, x: float, y: float | None) -> str:
-        return f"x = {x * 100:.1f} cm"
+        return f"x = {x * 100:.2f} cm (cellesenter)"
 
     def _oppdater_sveving(self) -> None:
         super()._oppdater_sveving()
@@ -1177,7 +1188,7 @@ class Platevisning(_Visning):
         self.ax_numerisk.title.set_text(f"Numerisk,  t = {self.t:.6g} s   (likevekt: {likevekt:.1f} °C)")
         self.ax_fourier.title.set_text(
             f"Fourier-rekke, {ledd} × {ledd} ledd,  t = {self.t:.6g} s\n"
-            f"Største avvik fra numerisk: {self._storste_avvik():.3f} °C"
+            f"Største avvik fra numerisk i cellesentrene: {self._storste_avvik():.3f} °C"
         )
 
     def _storste_avvik(self) -> float:
@@ -1205,12 +1216,11 @@ class Platevisning(_Visning):
 
     def _svevepunkt(self, hendelse) -> tuple | None:
         if hendelse.inaxes in (self.ax_numerisk, self.ax_fourier) and hendelse.xdata is not None:
-            return (float(np.clip(hendelse.xdata / 100, 0.0, self.L)),
-                    float(np.clip(hendelse.ydata / 100, 0.0, self.L)))
+            return self._naermeste(self.x, hendelse.xdata / 100), self._naermeste(self.y, hendelse.ydata / 100)
         return None
 
     def _posisjonstekst(self, x: float, y: float) -> str:
-        return f"x = {x * 100:.1f} cm,  y = {y * 100:.1f} cm"
+        return f"x = {x * 100:.1f} cm,  y = {y * 100:.1f} cm (cellesenter)"
 
     def _flytt_merke(self) -> None:
         for merke in (self.les_merke_numerisk, self.les_merke_fourier):
