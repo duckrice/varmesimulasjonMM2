@@ -4,15 +4,17 @@ Interaktiv simulering av temperaturen i isolert metall, enten en stav på 1 mete
 
 ## Start
 
-Krever Python 3.10 eller nyere.
+Krever Python 3.10 eller nyere, fra [python.org](https://www.python.org).
+
+**Windows:** dobbeltklikk `start.bat`. Første gang installeres pakkene simuleringen trenger, og det tar et par minutter. Etter det starter simuleringen med en gang.
+
+**Manuelt** (også på macOS/Linux, der stien er `.venv/bin/python` i stedet for `.venv\Scripts\python.exe`):
 
 ```bash
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 .venv\Scripts\python.exe simulering.py
 ```
-
-På Windows kan du etterpå dobbeltklikke `start.bat`. På macOS/Linux er stien `.venv/bin/python` i stedet for `.venv\Scripts\python.exe`.
 
 ## Stav eller plate
 
